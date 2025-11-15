@@ -12,164 +12,125 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.content
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
-@OptIn(ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalAnimationApi::class)
 @Composable
-fun CameraScreen() {
+fun CameraScreen(viewModel: MainViewModel = viewModel()) {
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
-    var responseText by remember { mutableStateOf("Mantén pulsado para iniciar el análisis.") }
-    var isLoading by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
 
-    val generativeModel = remember {
-        GenerativeModel(
-            modelName = "gemini-2.5-flash", 
-            apiKey = BuildConfig.GEMINI_API_KEY
-        )
-    }
-
-    val bitmapFlow = remember { MutableStateFlow<Bitmap?>(null) }
+    val isLoading by viewModel.isLoading.collectAsState()
+    val responseText by viewModel.responseText.collectAsState()
 
     if (cameraPermissionState.status.isGranted) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            viewModel.startAnalysis()
+                            try {
+                                awaitRelease()
+                            } finally {
+                                viewModel.stopAnalysis()
+                            }
+                        }
+                    )
+                }
+        ) {
+            // Camera Preview Area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.7f)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                if (isLoading) return@detectTapGestures
-                                
-                                // Inicia el proceso de análisis
-                                coroutineScope.launch {
-                                    withContext(Dispatchers.Main) {
-                                        isLoading = true
-                                        responseText = "Analizando..."
-                                    }
-
-                                    var isPressed = true
-                                    try {
-                                        // Bucle para análisis continuo mientras se mantiene pulsado
-                                        launch(Dispatchers.IO) {
-                                            while(isPressed) {
-                                                // 1. Obtener la imagen más reciente
-                                                val bitmap = bitmapFlow.filterNotNull().first()
-                                                
-                                                try {
-                                                    // 2. Usar el prompt optimizado
-                                                    val inputContent = content {
-                                                        image(bitmap)
-                                                        // Prompt optimizado para concisión y rol, lo que ayuda a reducir la carga
-                                                        text("Eres un asistente de visión en tiempo real. Describe concisa y brevemente la escena que se presenta en la imagen. La respuesta debe ser una única frase simple y clara, formulada estrictamente en español.")
-                                                    }
-                                                    
-                                                    // ⭐️ CAMBIO CRUCIAL: Usar generateContentStream para streaming
-                                                    val stream = generativeModel.generateContentStream(inputContent)
-                                                    
-                                                    // Limpiamos el texto para la nueva respuesta
-                                                    var currentResponse = ""
-
-                                                    // ⭐️ PROCESAR EL STREAM: Recolectar y mostrar los fragmentos
-                                                    stream.collect { chunk ->
-                                                        // Muestra el texto de forma fluida (token por token)
-                                                        val newText = chunk.text
-                                                        if (!newText.isNullOrEmpty()) {
-                                                            currentResponse += newText
-                                                            withContext(Dispatchers.Main) {
-                                                                responseText = currentResponse
-                                                            }
-                                                        }
-                                                    }
-                                                    
-                                                } catch (e: Exception) {
-                                                    // ⚠️ MANEJO DE ERRORES ROBUSTO: Captura 503, MissingFieldException, etc.
-                                                    Log.e("GeminiVision", "API Error: ${e.message}", e)
-                                                    withContext(Dispatchers.Main) {
-                                                        val errorMsg = e.localizedMessage ?: "Error desconocido de API."
-                                                        // Informa del error de conexión/servidor
-                                                        responseText = "Error de Servidor o Conexión (503). Reintentando... Detalle: ${errorMsg.substringBefore(":")}" 
-                                                    }
-                                                    // Implementación de Backoff simple: espera 1 segundo antes de reintentar
-                                                    delay(1000) 
-                                                }
-                                                // Retardo entre peticiones de análisis
-                                                delay(1500) 
-                                            }
-                                        }
-                                        awaitRelease() // Espera a que el usuario levante el dedo
-                                    } finally {
-                                        isPressed = false
-                                        withContext(Dispatchers.Main) {
-                                            isLoading = false
-                                            responseText = "Mantén pulsado para iniciar el análisis."
-                                        }
-                                    }
-                                }
-                            }
-                        )
-                    }
+                    .weight(0.5f)
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
             ) {
                 CameraWithImageAnalysis(
                     onFrame = { bitmap ->
-                        bitmapFlow.value = bitmap
+                        viewModel.bitmapFlow.value = bitmap
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(32.dp))
                 )
             }
 
-            // Response Area
+            // Microphone Area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.3f)
-                    .background(Color.Black)
-                    .padding(16.dp),
-                contentAlignment = if (isLoading && responseText == "Analizando...") Alignment.Center else Alignment.TopStart
+                    .weight(0.5f),
+                contentAlignment = Alignment.Center
             ) {
-                if (isLoading && responseText == "Analizando...") {
-                    CircularProgressIndicator()
-                } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
+                    val scale by infiniteTransition.animateFloat(
+                        initialValue = 1f,
+                        targetValue = if (isLoading) 1.2f else 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(600, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ), label = "mic_scale"
+                    )
+
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = responseText,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .scale(scale)
+                            .size(128.dp)
+                    )
+
                     Text(
                         text = responseText,
                         color = Color.White,
-                        fontSize = 18.sp,
-                        textAlign = TextAlign.Start,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
+                        modifier = Modifier.padding(top = 16.dp)
                     )
                 }
             }
@@ -194,13 +155,20 @@ fun CameraWithImageAnalysis(
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
     }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
 
     AndroidView(
         factory = { ctx ->
             val previewView = PreviewView(ctx)
-            val executor = ContextCompat.getMainExecutor(ctx)
+            val mainExecutor = ContextCompat.getMainExecutor(ctx)
 
-            imageAnalysis.setAnalyzer(executor) { imageProxy ->
+            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 onFrame(imageProxy.toBitmap())
                 imageProxy.close()
             }
@@ -215,7 +183,7 @@ fun CameraWithImageAnalysis(
                     .build()
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
-            }, executor)
+            }, mainExecutor)
             previewView
         },
         modifier = modifier,
@@ -238,7 +206,6 @@ fun ImageProxy.toBitmap(): Bitmap? {
 
     val nv21 = ByteArray(ySize + uSize + vSize)
 
-    //U and V are swapped
     yBuffer.get(nv21, 0, ySize)
     vBuffer.get(nv21, ySize, vSize)
     uBuffer.get(nv21, ySize + vSize, uSize)

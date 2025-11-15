@@ -49,13 +49,13 @@ import java.io.ByteArrayOutputStream
 @Composable
 fun CameraScreen() {
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
-    var responseText by remember { mutableStateOf("Press and hold the screen to start analysis.") }
+    var responseText by remember { mutableStateOf("Mantén pulsado para iniciar el análisis.") }
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
     val generativeModel = remember {
         GenerativeModel(
-            modelName = "gemini-2.5-flash", // Changed from gemini-1.5-flash-latest
+            modelName = "gemini-2.5-flash", 
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
@@ -73,42 +73,68 @@ fun CameraScreen() {
                             onPress = {
                                 if (isLoading) return@detectTapGestures
                                 
+                                // Inicia el proceso de análisis
                                 coroutineScope.launch {
                                     withContext(Dispatchers.Main) {
                                         isLoading = true
-                                        responseText = "Analyzing..."
+                                        responseText = "Analizando..."
                                     }
 
                                     var isPressed = true
                                     try {
-                                        // Continuous analysis while pressed
+                                        // Bucle para análisis continuo mientras se mantiene pulsado
                                         launch(Dispatchers.IO) {
                                             while(isPressed) {
+                                                // 1. Obtener la imagen más reciente
                                                 val bitmap = bitmapFlow.filterNotNull().first()
+                                                
                                                 try {
+                                                    // 2. Usar el prompt optimizado
                                                     val inputContent = content {
                                                         image(bitmap)
-                                                        text("Describe lo que ves en una frase corta y sencilla en español.")
+                                                        // Prompt optimizado para concisión y rol, lo que ayuda a reducir la carga
+                                                        text("Eres un asistente de visión en tiempo real. Describe concisa y brevemente la escena que se presenta en la imagen. La respuesta debe ser una única frase simple y clara, formulada estrictamente en español.")
                                                     }
-                                                    val response = generativeModel.generateContent(inputContent)
-                                                    withContext(Dispatchers.Main) {
-                                                        responseText = response.text ?: "No description available."
+                                                    
+                                                    // ⭐️ CAMBIO CRUCIAL: Usar generateContentStream para streaming
+                                                    val stream = generativeModel.generateContentStream(inputContent)
+                                                    
+                                                    // Limpiamos el texto para la nueva respuesta
+                                                    var currentResponse = ""
+
+                                                    // ⭐️ PROCESAR EL STREAM: Recolectar y mostrar los fragmentos
+                                                    stream.collect { chunk ->
+                                                        // Muestra el texto de forma fluida (token por token)
+                                                        val newText = chunk.text
+                                                        if (!newText.isNullOrEmpty()) {
+                                                            currentResponse += newText
+                                                            withContext(Dispatchers.Main) {
+                                                                responseText = currentResponse
+                                                            }
+                                                        }
                                                     }
+                                                    
                                                 } catch (e: Exception) {
+                                                    // ⚠️ MANEJO DE ERRORES ROBUSTO: Captura 503, MissingFieldException, etc.
                                                     Log.e("GeminiVision", "API Error: ${e.message}", e)
                                                     withContext(Dispatchers.Main) {
-                                                        responseText = "Error: ${e.localizedMessage}"
+                                                        val errorMsg = e.localizedMessage ?: "Error desconocido de API."
+                                                        // Informa del error de conexión/servidor
+                                                        responseText = "Error de Servidor o Conexión (503). Reintentando... Detalle: ${errorMsg.substringBefore(":")}" 
                                                     }
+                                                    // Implementación de Backoff simple: espera 1 segundo antes de reintentar
+                                                    delay(1000) 
                                                 }
-                                                delay(500) // Delay between requests
+                                                // Retardo entre peticiones de análisis
+                                                delay(1500) 
                                             }
                                         }
-                                        awaitRelease()
+                                        awaitRelease() // Espera a que el usuario levante el dedo
                                     } finally {
                                         isPressed = false
                                         withContext(Dispatchers.Main) {
                                             isLoading = false
-                                            responseText = "Press and hold the screen to start analysis."
+                                            responseText = "Mantén pulsado para iniciar el análisis."
                                         }
                                     }
                                 }
@@ -131,20 +157,21 @@ fun CameraScreen() {
                     .weight(0.3f)
                     .background(Color.Black)
                     .padding(16.dp),
-                contentAlignment = Alignment.Center
+                contentAlignment = if (isLoading && responseText == "Analizando...") Alignment.Center else Alignment.TopStart
             ) {
-                if (isLoading && responseText == "Analyzing...") {
+                if (isLoading && responseText == "Analizando...") {
                     CircularProgressIndicator()
+                } else {
+                    Text(
+                        text = responseText,
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        textAlign = TextAlign.Start,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                    )
                 }
-                Text(
-                    text = responseText,
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                )
             }
         }
     } else {

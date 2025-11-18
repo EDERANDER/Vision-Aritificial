@@ -140,7 +140,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             _isLoading.value = true
-            _responseText.value = "Analizando..."
+            _responseText.value = "" // Limpiar para el streaming
 
             var success = false
             var attempts = 0
@@ -148,7 +148,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             while (!success && attempts < maxAttempts) {
                 try {
-                    val basePrompt = "Eres un asistente de visión en tiempo real, describe la escena en la imagen de forma natural, fluida en una sola frase.Important:La respuesta debe ser únicamente texto plano, no incluya ningún formato adicional. Habla en español."
+                    val basePrompt = "Eres un asistente de visión en tiempo real, describe la escena en la imagen de forma natural, fluida en una sola frase. Important: La respuesta debe ser únicamente texto plano, no incluya ningún formato adicional. Habla en español."
                     val combinedPrompt = "$basePrompt\n\nPregunta del usuario: $voicePrompt"
 
                     val inputContent = content {
@@ -156,19 +156,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         text(combinedPrompt)
                     }
 
-                    val response = generativeModel.generateContent(inputContent)
-                    val description = response.text ?: "No se pudo generar una descripción."
+                    val responseStream = generativeModel.generateContentStream(inputContent)
+                    val fullResponse = StringBuilder()
 
-                    _responseText.value = description
-
-                    if (isTtsInitialized && description.isNotBlank() && !description.contains("No se pudo")) {
-                        textToSpeech?.speak(description, TextToSpeech.QUEUE_FLUSH, null, null)
+                    responseStream.collect { chunk ->
+                        chunk.text?.let { textPart ->
+                            fullResponse.append(textPart)
+                            // Actualiza la UI en tiempo real
+                            _responseText.value = fullResponse.toString()
+                        }
                     }
-                    success = true
+
+                    val finalDescription = fullResponse.toString()
+                    if (finalDescription.isNotBlank()) {
+                        if (isTtsInitialized && !finalDescription.contains("No se pudo")) {
+                            textToSpeech?.speak(finalDescription, TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                        success = true
+                    } else {
+                        _responseText.value = "No se pudo generar una descripción."
+                    }
 
                 } catch (e: Exception) {
                     attempts++
-                    Log.e("GeminiVision", "Error during Gemini API call (attempt $attempts)", e)
+                    Log.e("GeminiVision", "Error during Gemini API stream (attempt $attempts)", e)
                     val errorMessage = e.localizedMessage ?: "Error desconocido"
 
                     if (errorMessage.contains("503", ignoreCase = true) && attempts < maxAttempts) {

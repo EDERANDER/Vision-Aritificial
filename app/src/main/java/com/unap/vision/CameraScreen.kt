@@ -235,6 +235,7 @@ fun CameraWithImageAnalysis(
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val imageAnalysis = remember {
         ImageAnalysis.Builder()
+            .setTargetResolution(android.util.Size(640, 480))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
     }

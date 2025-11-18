@@ -62,6 +62,17 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
 @OptIn(ExperimentalPermissionsApi::class)
+/**
+ * Composable principal que construye la pantalla de la cámara.
+ *
+ * Esta función se encarga de:
+ * - Solicitar los permisos de cámara y micrófono.
+ * - Mostrar la vista previa de la cámara en la mitad superior de la pantalla.
+ * - Mostrar los controles de interacción (área táctil para hablar) y los textos de estado en la mitad inferior.
+ * - Conectar la UI con el [MainViewModel] para manejar el estado y los eventos.
+ *
+ * @param viewModel La instancia del [MainViewModel] que gestiona la lógica de la aplicación.
+ */
 @Composable
 fun CameraScreen(viewModel: MainViewModel = viewModel()) {
     val permissionsState = rememberMultiplePermissionsState(
@@ -72,29 +83,25 @@ fun CameraScreen(viewModel: MainViewModel = viewModel()) {
     val responseText by viewModel.responseText.collectAsState()
     val spokenText by viewModel.spokenText.collectAsState()
 
-    // Handle permissions
     if (!permissionsState.allPermissionsGranted) {
         LaunchedEffect(Unit) {
             permissionsState.launchMultiplePermissionRequest()
         }
-        // Show a message while waiting for permissions
         Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Text("Se necesitan permisos de cámara y micrófono.", color = Color.White)
         }
         return
     }
 
-    // Main UI
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Camera Preview Area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f) // Give more space to the camera
+                .weight(1f)
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -108,16 +115,26 @@ fun CameraScreen(viewModel: MainViewModel = viewModel()) {
             )
         }
 
-        // Control and Text Area
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(16.dp),
+                .padding(16.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            viewModel.startListening()
+                            try {
+                                awaitRelease()
+                            } finally {
+                                viewModel.stopListening()
+                            }
+                        }
+                    )
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Display spoken text if available
             if (spokenText.isNotBlank()) {
                 Text(
                     text = "\"$spokenText\"",
@@ -130,18 +147,14 @@ fun CameraScreen(viewModel: MainViewModel = viewModel()) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Microphone Button
             val isListening = responseText == "Escuchando..."
             MicButton(
                 isLoading = isLoading,
-                isListening = isListening,
-                onPress = { viewModel.startListening() },
-                onRelease = { viewModel.stopListening() }
+                isListening = isListening
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Display response text
             Text(
                 text = responseText,
                 style = MaterialTheme.typography.titleLarge,
@@ -153,12 +166,20 @@ fun CameraScreen(viewModel: MainViewModel = viewModel()) {
     }
 }
 
+/**
+ * Un Composable que muestra un botón de micrófono animado.
+ *
+ * Actúa como un indicador visual del estado de la grabación de voz.
+ * La animación (escala y color) cambia según si la app está escuchando, procesando o inactiva.
+ * Este Composable no maneja la interacción del usuario directamente.
+ *
+ * @param isLoading Indica si la aplicación está procesando una solicitud.
+ * @param isListening Indica si la aplicación está escuchando activamente la voz del usuario.
+ */
 @Composable
 private fun MicButton(
     isLoading: Boolean,
-    isListening: Boolean,
-    onPress: () -> Unit,
-    onRelease: () -> Unit
+    isListening: Boolean
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
     val scale by infiniteTransition.animateFloat(
@@ -181,19 +202,7 @@ private fun MicButton(
             .size(128.dp)
             .scale(scale)
             .clip(CircleShape)
-            .background(color)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        onPress()
-                        try {
-                            awaitRelease()
-                        } finally {
-                            onRelease()
-                        }
-                    }
-                )
-            },
+            .background(color),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -206,6 +215,16 @@ private fun MicButton(
 }
 
 
+/**
+ * Un Composable que integra la vista previa de la cámara de CameraX y configura un analizador de imágenes.
+ *
+ * Utiliza `AndroidView` para alojar una `PreviewView` de CameraX. Configura un `ImageAnalysis`
+ * para procesar los fotogramas de la cámara en un hilo separado, convirtiéndolos a `Bitmap` y
+ * emitiéndolos a través del callback `onFrame`.
+ *
+ * @param modifier Modificador de Compose para aplicar a la vista de la cámara.
+ * @param onFrame Un callback que se invoca con cada nuevo `Bitmap` procesado desde la cámara.
+ */
 @Composable
 fun CameraWithImageAnalysis(
     modifier: Modifier = Modifier,
@@ -254,6 +273,15 @@ fun CameraWithImageAnalysis(
     )
 }
 
+/**
+ * Función de extensión para convertir un `ImageProxy` a un `Bitmap`.
+ *
+ * Este método está optimizado para el formato `YUV_420_888`, que es común en CameraX.
+ * Convierte los planos Y, U y V a un array de bytes NV21, y luego comprime este
+ * a un `Bitmap` en formato JPEG.
+ *
+ * @return Un `Bitmap` si la conversión es exitosa, o `null` si el formato no es compatible.
+ */
 fun ImageProxy.toBitmap(): Bitmap? {
     if (format != ImageFormat.YUV_420_888) {
         Log.e("ImageProxy", "Unsupported image format: $format")

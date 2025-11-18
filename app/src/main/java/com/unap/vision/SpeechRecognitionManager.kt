@@ -10,18 +10,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
+/**
+ * Define los diferentes estados del proceso de reconocimiento de voz.
+ * Permite a la UI reaccionar a cambios como el inicio de la escucha, la recepción de resultados o errores.
+ */
 sealed class RecognitionState {
+    /** El reconocedor está inactivo y no está escuchando. */
     object Idle : RecognitionState()
+    /** El reconocedor está activamente escuchando la entrada de voz. */
     object Listening : RecognitionState()
+    /** Se ha recibido un resultado de texto del reconocimiento. */
     data class Result(val text: String) : RecognitionState()
+    /** Ha ocurrido un error durante el reconocimiento. */
     data class Error(val error: String) : RecognitionState()
 }
 
+/**
+ * Gestiona todas las operaciones de reconocimiento de voz utilizando el `SpeechRecognizer` de Android.
+ *
+ * Esta clase encapsula la lógica para iniciar y detener la escucha, manejar los eventos del ciclo de vida
+ * del reconocimiento y exponer el estado actual y los resultados a través de un `StateFlow`.
+ *
+ * @param context El contexto de la aplicación, necesario para crear una instancia de `SpeechRecognizer`.
+ */
 class SpeechRecognitionManager(private val context: Context) {
 
     private var speechRecognizer: SpeechRecognizer? = null
 
     private val _recognitionState = MutableStateFlow<RecognitionState>(RecognitionState.Idle)
+    /**
+     * Un `StateFlow` que emite el estado actual del reconocimiento de voz.
+     *
+     * Los observadores pueden recolectar este flujo para actualizar la UI en función de si el reconocedor
+     * está inactivo, escuchando, ha producido un resultado o ha encontrado un error.
+     */
     val recognitionState = _recognitionState.asStateFlow()
 
     private val recognitionListener = object : RecognitionListener {
@@ -60,6 +82,12 @@ class SpeechRecognitionManager(private val context: Context) {
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 
+    /**
+     * Inicia el proceso de escucha de voz.
+     *
+     * Comprueba si el reconocimiento de voz está disponible, crea una instancia de `SpeechRecognizer` si es necesario
+     * y comienza a escuchar la entrada de voz del usuario. El estado se actualizará a `Listening`.
+     */
     fun startListening() {
         if (SpeechRecognizer.isRecognitionAvailable(context)) {
             if (speechRecognizer == null) {
@@ -77,10 +105,21 @@ class SpeechRecognitionManager(private val context: Context) {
         }
     }
 
+    /**
+     * Detiene el proceso de escucha de voz.
+     *
+     * El `SpeechRecognizer` dejará de escuchar y procesará el audio capturado hasta ese momento.
+     */
     fun stopListening() {
         speechRecognizer?.stopListening()
     }
 
+    /**
+     * Libera los recursos utilizados por el `SpeechRecognizer`.
+     *
+     * Este método debe ser llamado cuando el gestor de reconocimiento ya no es necesario (por ejemplo, en `onCleared`
+     * de un ViewModel) para evitar fugas de memoria.
+     */
     fun destroy() {
         speechRecognizer?.destroy()
         speechRecognizer = null

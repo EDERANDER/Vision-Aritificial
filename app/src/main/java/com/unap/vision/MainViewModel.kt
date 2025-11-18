@@ -17,29 +17,38 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+/**
+ * ViewModel principal de la aplicación, responsable de orquestar la lógica de negocio y el estado de la UI.
+ *
+ * Gestiona la interacción entre la captura de imágenes, el reconocimiento de voz, el modelo generativo de Gemini
+ * y el motor de Text-to-Speech (TTS). Expone el estado a la UI a través de `StateFlow` y maneja
+ * el ciclo de vida de los componentes que utiliza.
+ *
+ * @param application La instancia de la aplicación, necesaria para el `AndroidViewModel`.
+ */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    // --- STATE ---
     private val _isLoading = MutableStateFlow(false)
+    /** `StateFlow` que indica si hay una operación de análisis en curso. */
     val isLoading = _isLoading.asStateFlow()
 
     private val _responseText = MutableStateFlow("Mantén pulsado para hablar.")
+    /** `StateFlow` que contiene el texto de respuesta del modelo o los mensajes de estado para mostrar en la UI. */
     val responseText = _responseText.asStateFlow()
 
     private val _spokenText = MutableStateFlow("")
+    /** `StateFlow` que contiene el texto reconocido a partir de la entrada de voz del usuario. */
     val spokenText = _spokenText.asStateFlow()
 
-    // --- SERVICES ---
     private val generativeModel: GenerativeModel
     private var textToSpeech: TextToSpeech? = null
     private var isTtsInitialized = false
     private val speechRecognitionManager: SpeechRecognitionManager
 
-    // --- ANALYSIS ---
+    /** `StateFlow` que mantiene el último fotograma de la cámara como un `Bitmap` para el análisis. */
     val bitmapFlow = MutableStateFlow<Bitmap?>(null)
 
     init {
-        // Initialize services
         generativeModel = GenerativeModel(
             modelName = "gemini-2.5-flash",
             apiKey = BuildConfig.GEMINI_API_KEY
@@ -51,6 +60,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         observeSpeechRecognition()
     }
 
+    /**
+     * Configura e inicializa el motor de Text-to-Speech (TTS).
+     * Establece el idioma a español y la velocidad de habla.
+     */
     private fun setupTextToSpeech(context: Application) {
         try {
             textToSpeech = TextToSpeech(context) { status ->
@@ -68,16 +81,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Observa el `StateFlow` del `SpeechRecognitionManager` para reaccionar a los eventos de voz.
+     *
+     * Inicia el análisis de la imagen cuando se recibe un resultado de voz válido.
+     * Actualiza la UI para reflejar el estado de escucha o los errores.
+     */
     private fun observeSpeechRecognition() {
         speechRecognitionManager.recognitionState
             .onEach { state ->
                 when (state) {
                     is RecognitionState.Idle -> {
-                        // Do nothing
                     }
                     is RecognitionState.Listening -> {
                         _responseText.value = "Escuchando..."
-                        _spokenText.value = "" // Clear previous spoken text
+                        _spokenText.value = ""
                     }
                     is RecognitionState.Result -> {
                         _spokenText.value = state.text
@@ -94,14 +112,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }.launchIn(viewModelScope)
     }
 
+    /** Delega la acción de iniciar la escucha al `SpeechRecognitionManager`. */
     fun startListening() {
         speechRecognitionManager.startListening()
     }
 
+    /** Delega la acción de detener la escucha al `SpeechRecognitionManager`. */
     fun stopListening() {
         speechRecognitionManager.stopListening()
     }
 
+    /**
+     * Analiza la imagen actual de la cámara junto con una pregunta de voz.
+     *
+     * Esta función se lanza en una corrutina de IO. Combina un prompt base con la pregunta del usuario,
+     * envía la imagen y el texto al modelo de Gemini, e implementa una lógica de reintentos para manejar
+     * errores de sobrecarga del modelo (503). La respuesta generada se emite para la UI y se reproduce
+     * a través de TTS.
+     * @param voicePrompt El texto reconocido de la pregunta del usuario.
+     */
     private fun analyzeImageWithVoicePrompt(voicePrompt: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val currentBitmap = bitmapFlow.value
@@ -119,7 +148,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             while (!success && attempts < maxAttempts) {
                 try {
-                    val basePrompt = "Eres un asistente de visión en tiempo real. Describe la escena en la imagen de forma natural y fluida. Importante: La respuesta debe ser únicamente texto plano, sin ningún tipo de formato como negritas, cursivas o asteriscos. Habla en español."
+                    val basePrompt = "Eres un asistente de visión en tiempo real, describe la escena en la imagen de forma natural, fluida en una sola frase.Important:La respuesta debe ser únicamente texto plano, no incluya ningún formato adicional. Habla en español."
                     val combinedPrompt = "$basePrompt\n\nPregunta del usuario: $voicePrompt"
 
                     val inputContent = content {
@@ -135,7 +164,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (isTtsInitialized && description.isNotBlank() && !description.contains("No se pudo")) {
                         textToSpeech?.speak(description, TextToSpeech.QUEUE_FLUSH, null, null)
                     }
-                    success = true // Mark as success to exit the loop
+                    success = true
 
                 } catch (e: Exception) {
                     attempts++
@@ -144,25 +173,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     if (errorMessage.contains("503", ignoreCase = true) && attempts < maxAttempts) {
                         _responseText.value = "Modelo sobrecargado, reintentando... ($attempts/$maxAttempts)"
-                        delay(1000) // Wait for 1 second before retrying
+                        delay(1000)
                     } else {
                         _responseText.value = "Error: $errorMessage"
-                        break // Exit loop on non-503 error or max attempts reached
+                        break
                     }
                 }
             }
 
             _isLoading.value = false
-            // Reset to idle state after analysis
             viewModelScope.launch {
                 _spokenText.value = ""
-                // Do not reset responseText here to allow user to see the result
             }
         }
     }
 
 
 
+    /**
+     * Se llama cuando el ViewModel está a punto de ser destruido.
+     * Libera los recursos del motor TTS y del `SpeechRecognitionManager` para prevenir fugas de memoria.
+     */
     override fun onCleared() {
         super.onCleared()
         textToSpeech?.stop()

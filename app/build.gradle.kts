@@ -73,6 +73,7 @@ dependencies {
     implementation(libs.google.ai.generativeai)
     implementation(libs.accompanist.permissions)
     implementation(libs.androidx.compose.animation)
+    implementation(libs.common)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -70,7 +70,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (status == TextToSpeech.SUCCESS) {
                     isTtsInitialized = true
                     textToSpeech?.language = Locale("es", "ES")
-                    textToSpeech?.setSpeechRate(1.25f)
+                    textToSpeech?.setSpeechRate(1.5f)
                     Log.d("GeminiVision", "TTS initialized successfully.")
                 } else {
                     Log.e("GeminiVision", "TTS initialization failed with status: $status")

@@ -50,7 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         generativeModel = GenerativeModel(
-            modelName = "gemini-2.5-flash",
+            modelName = "gemini-2.0-flash-lite-preview",
             apiKey = BuildConfig.GEMINI_API_KEY
         )
 
